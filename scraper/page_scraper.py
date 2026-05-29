@@ -93,6 +93,20 @@ GUTSCHEINRAUSCH_DEAL_PATTERNS = (
     re.compile(r"1000.*auf\s*flugreisen", re.I),
 )
 
+# CMP / Cookie-Banner (u. a. weltderrabatte.de, Checkout Charlie)
+_COMMON_CONSENT_SELECTORS = (
+    'button:has-text("ZUSTIMMEN")',
+    'button:has-text("Zustimmen")',
+    'button:has-text("Alle akzeptieren")',
+    'button:has-text("Akzeptieren")',
+    'button:has-text("Okay")',
+    'a:has-text("Okay")',
+    "#onetrust-accept-btn-handler",
+    "#didomi-notice-agree-button",
+    "#cookie_action_close_header",
+    ".cmpboxbtn.cmpboxbtnyes",
+)
+
 
 @dataclass
 class ButtonLink:
@@ -113,6 +127,36 @@ class ScrapedPage:
 class PublisherScraper:
     def __init__(self, page):
         self.page = page
+
+    @staticmethod
+    async def _click_first_visible(target, selectors: tuple[str, ...], wait_ms: int = 800) -> bool:
+        for sel in selectors:
+            btn = target.locator(sel).first
+            try:
+                if await btn.is_visible(timeout=2000):
+                    await btn.click()
+                    await target.wait_for_timeout(wait_ms)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _dismiss_common_consent(self, page=None) -> None:
+        target = page or self.page
+        await self._click_first_visible(target, _COMMON_CONSENT_SELECTORS)
+
+    async def dismiss_consent_for(self, scraper: ScraperProfile, page=None) -> None:
+        """Cookie-Banner schließen (vor Screenshots und nach Navigation)."""
+        if scraper == "welt_der_rabatte":
+            await self._welt_der_rabatte_dismiss_consent(page)
+        elif scraper == "coupons_de":
+            await self._coupons_de_dismiss_consent()
+        elif scraper in ("sparwelt", "gutscheine_de"):
+            await self._checkout_charlie_dismiss_consent()
+        elif scraper == "igraal":
+            await self._igraal_dismiss_consent(page)
+        else:
+            await self._dismiss_common_consent(page)
 
     async def scrape(self, publisher: PublisherEntry) -> ScrapedPage:
         url = publisher.url
@@ -214,20 +258,7 @@ class PublisherScraper:
         return any(p.search(title) for p in COUPONS_DE_DEAL_PATTERNS)
 
     async def _coupons_de_dismiss_consent(self) -> None:
-        for sel in (
-            'button:has-text("Alle akzeptieren")',
-            'button:has-text("Akzeptieren")',
-            "#onetrust-accept-btn-handler",
-            'button:has-text("Zustimmen")',
-        ):
-            btn = self.page.locator(sel).first
-            try:
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    await self.page.wait_for_timeout(800)
-                    return
-            except Exception:
-                continue
+        await self._click_first_visible(self.page, _COMMON_CONSENT_SELECTORS)
 
     async def _collect_coupons_de_vouchers(self, base_url: str) -> list[dict]:
         """Nur 1.000€- und 500€-Last-Minute-Gutschein aus der Merchant-Showbox."""
@@ -602,19 +633,7 @@ class PublisherScraper:
         return any(p.search(normalized) for p in patterns)
 
     async def _checkout_charlie_dismiss_consent(self) -> None:
-        for sel in (
-            'button:has-text("Alle akzeptieren")',
-            'button:has-text("Akzeptieren")',
-            ".cmpboxbtn.cmpboxbtnyes",
-        ):
-            btn = self.page.locator(sel).first
-            try:
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    await self.page.wait_for_timeout(800)
-                    return
-            except Exception:
-                continue
+        await self._click_first_visible(self.page, _COMMON_CONSENT_SELECTORS)
 
     async def _scrape_checkout_charlie_playwright(
         self, deal_patterns: tuple, label: str
@@ -753,20 +772,7 @@ class PublisherScraper:
 
     async def _welt_der_rabatte_dismiss_consent(self, page=None) -> None:
         target = page or self.page
-        for sel in (
-            'a:has-text("Okay")',
-            'button:has-text("Okay")',
-            "#cookie_action_close_header",
-            'button:has-text("Alle akzeptieren")',
-        ):
-            btn = target.locator(sel).first
-            try:
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    await target.wait_for_timeout(800)
-                    return
-            except Exception:
-                continue
+        await self._click_first_visible(target, _COMMON_CONSENT_SELECTORS)
 
     async def _scrape_welt_der_rabatte_playwright(
         self,
@@ -1042,20 +1048,11 @@ class PublisherScraper:
 
     async def _igraal_dismiss_consent(self, page=None) -> None:
         target = page or self.page
-        for sel in (
-            'button:has-text("Alle akzeptieren")',
+        igraal_selectors = (
             'button:has-text("AKZEPTIEREN")',
-            "#didomi-notice-agree-button",
             'a:has-text("AKZEPTIEREN")',
-        ):
-            btn = target.locator(sel).first
-            try:
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    await target.wait_for_timeout(800)
-                    return
-            except Exception:
-                continue
+        ) + _COMMON_CONSENT_SELECTORS
+        await self._click_first_visible(target, igraal_selectors)
 
     async def _collect_igraal_deals(self, page) -> list[dict]:
         entries: list[dict] = []

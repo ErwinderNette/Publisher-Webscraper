@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 
 from config.settings import settings
+from validators.coupon_validator import get_expected_month_code
 
 DETAIL_COLUMNS = [
     "Prüfdatum",
@@ -138,3 +139,12 @@ def generate_report(results: list[dict]):
     print(f" -> CSV:   {csv_path}")
     print(f" -> Excel: {xlsx_path}")
     print(f"    Blätter: Übersicht ({len(overview_df)}), Vollständig ({len(df)}), Handlungsbedarf ({len(action_df)})")
+
+    from reporting.email_generator import generate_emails
+
+    generate_emails(
+        results,
+        csv_path=csv_path,
+        timestamp=timestamp,
+        expected_code=get_expected_month_code(),
+    )

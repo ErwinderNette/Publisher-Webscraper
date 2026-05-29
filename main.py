@@ -20,6 +20,7 @@ from validators.coupon_validator import (
 from validators.url_validator import validate_redirect
 from validators.page_checks import validate_logo, validate_expired_deals
 from reporting.report_generator import generate_report
+from reporting.screenshot_annotator import capture_issue_screenshot
 
 console = Console()
 CODE_RE = re.compile(r"(?:AFF|KUP)\d{4}", re.IGNORECASE)
@@ -59,11 +60,35 @@ def _result_row(
     }
 
 
-async def _take_screenshot(page, prefix: str) -> str:
+async def _take_screenshot(scraper: PublisherScraper, publisher: PublisherEntry, prefix: str) -> str:
+    await scraper.dismiss_consent_for(publisher.scraper)
     screenshot_name = f"{prefix}_{datetime.now().strftime('%H%M%S_%f')}.png"
     screenshot_path = os.path.join(settings.screenshot_dir, screenshot_name)
-    await page.screenshot(path=screenshot_path, full_page=True)
+    await scraper.page.screenshot(path=screenshot_path, full_page=True)
     return f"screenshots/{screenshot_name}"
+
+
+async def _issue_screenshot(
+    scraper: PublisherScraper,
+    publisher: PublisherEntry,
+    prefix: str,
+    overview_ss: str,
+    *,
+    hint_texts=None,
+    ist: str = "",
+    soll: str = "",
+    voucher_href: str = "",
+) -> str:
+    await scraper.dismiss_consent_for(publisher.scraper)
+    return await capture_issue_screenshot(
+        scraper.page,
+        prefix,
+        hint_texts=hint_texts,
+        ist=ist,
+        soll=soll,
+        voucher_href=voucher_href,
+        fallback_relative=overview_ss,
+    )
 
 
 async def run_qc_checks():
@@ -117,13 +142,24 @@ async def run_qc_checks():
                 continue
 
             slug = _slug(publisher.name)
-            overview_ss = await _take_screenshot(page, f"overview_{slug}")
+            overview_ss = await _take_screenshot(scraper, publisher, f"overview_{slug}")
             console.print(f"   📷 Übersichts-Screenshot: {overview_ss}")
 
             # --- Gutscheincode (Seite) ---
             if "codes" in publisher.checks:
                 code_val = validate_page_codes(scraped.found_codes)
-                ss = overview_ss if not code_val["is_valid"] else "-"
+                ss = "-"
+                if not code_val["is_valid"]:
+                    outdated = ", ".join(code_val.get("outdated") or [])
+                    ss = await _issue_screenshot(
+                        scraper,
+                        publisher,
+                        f"code_{slug}",
+                        overview_ss,
+                        hint_texts=[outdated] if outdated else None,
+                        ist=", ".join(code_val["found"]) or "keine",
+                        soll=code_val["expected"],
+                    )
                 all_results.append(
                     _result_row(
                         publisher,
@@ -156,7 +192,13 @@ async def run_qc_checks():
                 logo_val = validate_logo(scraped.soup)
                 ss = "-"
                 if not logo_val["is_valid"]:
-                    ss = await _take_screenshot(page, f"logo_{slug}")
+                    ss = await _issue_screenshot(
+                        scraper,
+                        publisher,
+                        f"logo_{slug}",
+                        overview_ss,
+                        hint_texts=["Trendtours"],
+                    )
                 all_results.append(
                     _result_row(
                         publisher,
@@ -178,7 +220,13 @@ async def run_qc_checks():
                 exp_val = validate_expired_deals(scraped.soup, publisher.scraper)
                 ss = "-"
                 if not exp_val["is_valid"]:
-                    ss = await _take_screenshot(page, f"expired_{slug}")
+                    ss = await _issue_screenshot(
+                        scraper,
+                        publisher,
+                        f"expired_{slug}",
+                        overview_ss,
+                        hint_texts=["Gutschein", "Coupon"],
+                    )
                 ist = exp_val.get("error") or "OK"
                 if exp_val.get("details"):
                     ist += " – " + "; ".join(exp_val["details"][:3])
@@ -259,10 +307,6 @@ async def run_qc_checks():
                         if url_code_val.get("action"):
                             actions.append(url_code_val["action"])
 
-                        ss = "-"
-                        if not is_ok:
-                            ss = await _take_screenshot(page, f"link_{slug}_{datetime.now().strftime('%H%M%S')}")
-
                         codes_in_url = CODE_RE.findall(final_url.upper())
                         redirect_label = "OK" if redirect_ok else "FEHLER"
                         ist_parts = [f"Redirect {redirect_label}: {final_url[:100]}"]
@@ -271,6 +315,20 @@ async def run_qc_checks():
                         ):
                             ist_parts.insert(0, f"Voucher: {btn.href}")
                         ist_parts.append(f"Code in URL: {', '.join(codes_in_url) or '–'}")
+
+                        ss = "-"
+                        if not is_ok:
+                            ss = await _issue_screenshot(
+                                scraper,
+                                publisher,
+                                f"link_{slug}",
+                                overview_ss,
+                                hint_texts=[btn.context_text],
+                                voucher_href=btn.href,
+                                ist=" | ".join(ist_parts),
+                                soll=str(expected_btn_code),
+                            )
+
                         all_results.append(
                             _result_row(
                                 publisher,

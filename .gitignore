@@ -10,6 +10,10 @@ __pycache__/
 reports/
 stealth_test.png
 
+# Gmail OAuth (nicht committen)
+config/gmail/credentials.json
+config/gmail/token.json
+
 # OS / IDE
 .DS_Store
 .idea/

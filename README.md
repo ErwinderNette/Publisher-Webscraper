@@ -2,7 +2,7 @@
 
 Internes Qualitätssicherungs-Tool der **uppr GmbH** zur automatisierten Prüfung von Trendtours-Gutscheinlistings auf Affiliate-Publisher-Seiten.
 
-Das Tool prüft die aktiven Top-Publisher monatlich: Gutscheincodes, Affiliate-Redirects, Logo und abgelaufene Aktionen (je nach Publisher-Profil). Referenzdaten kommen aus einem Google Sheet. Ergebnisse landen als Excel mit drei Blättern (Übersicht, Vollständig, Handlungsbedarf) plus CSV.
+Das Tool prüft die aktiven Top-Publisher monatlich: Gutscheincodes, Affiliate-Redirects, Logo und abgelaufene Aktionen — je nach Publisher-Profil. Referenzdaten kommen aus einem Google Sheet (ergänzt durch lokale Overrides). Ergebnisse landen als Excel mit drei Blättern (Übersicht, Vollständig, Handlungsbedarf), als CSV, mit Screenshots und optional fertigen E-Mail-Entwürfen an die Publisher-Kontakte.
 
 ---
 
@@ -10,14 +10,48 @@ Das Tool prüft die aktiven Top-Publisher monatlich: Gutscheincodes, Affiliate-R
 
 | Prüfung | Beschreibung |
 |--------|----------------|
-| **Gutscheincode** | Seitenweit: aktueller Monatscode aus Sheet, keine veralteten Codes |
-| **Affiliate-Links** | Buttons werden geklickt; Ziel-URL und Aktionscode in der URL werden mit dem Sheet abgeglichen |
-| **Logo** | Trendtours-Logo auf der Seite (nicht bei allen Publishern) |
-| **Abgelaufene Aktionen** | ShopClever: alte Codes ohne „abgelaufen“-Kennzeichnung |
+| **Gutscheincode** | Seitenweit: aktueller Monatscode aus Sheet, keine veralteten AFF/KUP-Codes |
+| **Affiliate-Links** | Deal-Buttons werden geklickt; Ziel-URL und Aktionscode in der URL werden mit Sheet und Kategorie abgeglichen |
+| **Logo** | Trendtours-Logo sichtbar (nur ShopClever) |
+| **Abgelaufene Aktionen** | ShopClever: alte Codes ohne klare „abgelaufen“-Kennzeichnung |
 
-**Publisher** stehen in `config/publishers.py` (11 URLs, 7 Gruppen — ohne durchgestrichene Partner aus der Vorgabe).
+Nicht jeder Publisher durchläuft alle Prüfungen. Die Zuordnung steht in `config/publishers.py` (`checks`-Tuple pro Eintrag).
 
-> **Hinweis:** ShopClever und coupons.de haben eigene Selektoren. Focus nutzt nur `data-testid="active-vouchers-widget"`. Andere Coupon-Seiten nutzen einen generischen Scraper. Cashback (Shoop, Igraal) prüft primär Codes und Logo.
+---
+
+## Aktive Publisher
+
+Aktuell **8 Publisher** in **6 Gruppen** (Partner aus der Vorgabe, die durchgestrichen sind, bleiben auskommentiert — z. B. Shoop, Gutscheine.Codes, Spiegel Gutscheine).
+
+| Publisher | Gruppe | Scraper-Profil | Checks |
+|-----------|--------|----------------|--------|
+| Welt der Rabatte | Welt der Rabatte | `welt_der_rabatte` | Code, Redirects, Abgelaufen |
+| Focus Gutscheine | Global Savings Group | `focus_gsg` | Code, Redirects, Abgelaufen |
+| ShopClever | ShopClever | `shopclever` | + Logo |
+| Coupons.de | Coupons | `coupons_de` | Code, Redirects, Abgelaufen |
+| Igraal | Global Savings Group | `igraal` | Code, Redirects, Abgelaufen |
+| Gutscheinrausch | Gutscheinrausch | `gutscheinrausch` | Code, Redirects, Abgelaufen |
+| Sparwelt | Checkout Charlie | `sparwelt` | Code, Redirects, Abgelaufen |
+| Gutscheine.de | Checkout Charlie | `gutscheine_de` | Code, Redirects, Abgelaufen |
+
+URLs und Aktivierung: [`config/publishers.py`](config/publishers.py).  
+Ansprechpartner für E-Mails: [`config/contacts.yaml`](config/contacts.yaml) (Lookup per `page_url`).
+
+### Scraper-Profile (Kurzüberblick)
+
+| Profil | Besonderheit |
+|--------|----------------|
+| `shopclever` | Eigenes DOM; Logo- und Abgelaufen-Check |
+| `coupons_de` | Playwright: Merchant-Showbox, Klick auf Code-Buttons |
+| `focus_gsg` | Nur `data-testid="active-vouchers-widget"`; Desktop-Viewport für Klicks |
+| `igraal` | Vier markierte Deals; Code- und Deal-Buttons per Playwright |
+| `sparwelt` / `gutscheine_de` | Checkout-Charlie-Layout; drei Hauptangebote |
+| `welt_der_rabatte` | Ein Haupt-Coupon mit `/go/`-Redirect |
+| `gutscheinrausch` | Drei markierte Angebote (Desktop-Viewport) |
+| `generic_coupons` | Fallback für einfache Coupon-Seiten (derzeit kein aktiver Publisher) |
+| `cashback` | Codes + Logo (derzeit auskommentiert, z. B. Shoop) |
+
+Focus und Igraal nutzen teils **Desktop-Viewport** für zuverlässige Klicks; der Standard-Browser bleibt mobil (Android-Emulation).
 
 ---
 
@@ -47,24 +81,56 @@ source venv/bin/activate
 python main.py
 ```
 
-Die Konsole zeigt den Fortschritt pro Publisher und Button. Am Ende erscheinen Pfade zu den generierten Reports.
+Die Konsole zeigt den Fortschritt pro Publisher und Deal-Link. Am Ende erscheinen Pfade zu Reports und ggf. E-Mail-Entwürfen.
 
-**Ausgabe:**
+### Ausgabe
 
-- `reports/QC_Report_YYYYMMDD_HHMMSS.xlsx` — Excel mit Blättern **Übersicht** (inkl. `Betroffene_Gutscheine` und Kurzfassung mit Gutscheintiteln), **Vollständig**, **Handlungsbedarf**
-- `reports/QC_Report_YYYYMMDD_HHMMSS.csv` — gleiche Detaildaten wie Blatt „Vollständig“
-- `reports/screenshots/` — pro Publisher ein **Übersichts-Screenshot** (alle Codes sichtbar) plus Fehler-Screenshots
+| Pfad | Inhalt |
+|------|--------|
+| `reports/QC_Report_YYYYMMDD_HHMMSS.xlsx` | Excel: **Übersicht** (inkl. `Betroffene_Gutscheine`, Kurzfassung), **Vollständig**, **Handlungsbedarf** |
+| `reports/QC_Report_YYYYMMDD_HHMMSS.csv` | Detaildaten wie Blatt „Vollständig“ (`;`-getrennt) |
+| `reports/screenshots/` | Pro Publisher ein **Übersichts-Screenshot** plus annotierte **Fehler-Screenshots** (roter Rahmen, Hinweistext) |
+| `reports/emails/YYYYMMDD_HHMMSS/` | E-Mail-Entwürfe nur bei **Handlungsbedarf** und passendem Kontakt |
+
+---
+
+## E-Mail-Entwürfe für Account Manager
+
+Nach jedem QC-Lauf erzeugt das Tool **fertige Entwürfe**, sofern ein Publisher Handlungsbedarf hat und in [`config/contacts.yaml`](config/contacts.yaml) hinterlegt ist.
+
+| Ausgabe | Beschreibung |
+|---------|----------------|
+| `{publisher}.html` | Vorschau / Copy-Paste |
+| `{publisher}.eml` | Import in Outlook/Apple Mail (Screenshots inline + CSV-Anhang) |
+| Gmail-Entwurf | Optional im Postfach `es@uppr.de`, `To:` = Publisher-Kontakt |
+
+**Ansprache:** `Hey {publisher_email},` (E-Mail-Adresse aus der Kontaktliste).
+
+**Betreff:** `trendtours - Unstimmigkeiten - {Monat} {Jahr}`
+
+**Anhänge:** vollständige `QC_Report_*.csv` des Laufs (zur Nachprüfung).
+
+Ohne Eintrag in `contacts.yaml` werden für diesen Publisher **keine** E-Mails erzeugt (Report bleibt unverändert).
+
+### Gmail-Setup (Google Workspace)
+
+Einmalige Einrichtung: [`config/gmail/README.md`](config/gmail/README.md)  
+`credentials.json` in `config/gmail/` legen; beim ersten Lauf mit Handlungsbedarf: Browser-OAuth als `es@uppr.de`.
+
+Ohne API: `gmail_enabled = False` in [`config/settings.py`](config/settings.py) — dann nur `.html`/`.eml` nutzen.
 
 ---
 
 ## Google Sheet (Referenz / „Source of Truth“)
 
-Das Sheet ist die **zentrale Monatsreferenz**: Welcher **Aktionscode** gilt gerade, und wohin muss welcher **Deal-Link** auf trendtours.de führen (Homepage, Flug, Bus, Reise-Hits, …). Das Tool lädt es per CSV-Export und vergleicht damit die Publisher-Seiten — ohne das Sheet müssten Codes und Ziel-URLs manuell gepflegt werden.
+Das Sheet ist die **zentrale Monatsreferenz**: Welcher **Aktionscode** gilt, und wohin muss welcher **Deal-Link** auf trendtours.de führen (Homepage, Flug, Bus, Reise-Hits, …). Das Tool lädt es per CSV-Export und vergleicht damit die Publisher-Seiten.
+
+Zusätzlich ergänzt [`config/reference.py`](config/reference.py) feste Overrides (z. B. Kampagnencode `AFF1906` für Flug, dynamische URLs für Reise-Hits/Reisewelt).
 
 | Einstellung | Wert |
 |-------------|------|
 | **Sheet-ID** | `1QLWxjyjSu1el9tEjiBaT3wxSPcbkhVXEqybzE8Tk33Y` |
-| **Export** | CSV über öffentlichen Export-Link (siehe `config/settings.py`) |
+| **Export** | CSV über öffentlichen Export-Link (`settings.sheet_export_url`) |
 | **Spalten** | `Link`, `Aktions-Code` (erste Spalte = Kategoriename) |
 
 **Kategorie-Mapping (intern → Sheet):**
@@ -78,13 +144,13 @@ Das Sheet ist die **zentrale Monatsreferenz**: Welcher **Aktionscode** gilt gera
 | `reisewelt` | Reisewelt |
 | `reiseziele` | Reiseziele und Länder |
 
-Das Sheet muss für den CSV-Export **lesbar** sein (z. B. „Jeder mit dem Link“). Bei `HTTP 401` läuft der QC mit Fallback weiter; Redirect-Vergleiche gegen das Sheet entfallen dann.
+Das Sheet muss für den CSV-Export **lesbar** sein (z. B. „Jeder mit dem Link“). Ist es nicht erreichbar (`HTTP 401` o. ä.), läuft der QC mit Fallback weiter; die Konsole warnt, Redirect-Vergleiche gegen das Sheet sind dann eingeschränkt.
 
 ---
 
 ## Konfiguration
 
-Alle Einstellungen in `config/settings.py` (Pydantic `BaseSettings`):
+Zentrale Einstellungen in [`config/settings.py`](config/settings.py) (Pydantic `BaseSettings`):
 
 | Parameter | Standard | Bedeutung |
 |-----------|----------|-----------|
@@ -94,9 +160,12 @@ Alle Einstellungen in `config/settings.py` (Pydantic `BaseSettings`):
 | `slow_mo` | `100` | Verzögerung zwischen Aktionen (ms) |
 | `timeout` | `30000` | Playwright-Timeout (ms) |
 | `report_dir` | `reports` | Report-Ausgabe |
-| `screenshot_dir` | `reports/screenshots` | Fehler-Screenshots |
+| `screenshot_dir` | `reports/screenshots` | Screenshots |
+| `gmail_enabled` | `True` | Gmail-API für Entwürfe |
+| `gmail_sender` | `es@uppr.de` | Absender / OAuth-Konto |
+| `gmail_credentials_dir` | `config/gmail` | `credentials.json`, `token.json` |
 
-Browser simuliert ein **Android-Mobile-Gerät** (Viewport, User-Agent, Geolocation Berlin), um Bot-Detection zu reduzieren (`playwright-stealth`).
+Der Browser simuliert standardmäßig ein **Android-Mobile-Gerät** (Viewport, User-Agent, Geolocation Berlin) mit `playwright-stealth`, um Bot-Detection zu reduzieren. Einzelne Scraper schalten für Klicks temporär auf Desktop-Viewport um.
 
 ---
 
@@ -104,21 +173,32 @@ Browser simuliert ein **Android-Mobile-Gerät** (Viewport, User-Agent, Geolocati
 
 ```
 trendtours_QC/
-├── main.py                 # Einstieg: Orchestrierung des QC-Laufs
+├── main.py                      # Einstieg: QC-Orchestrierung
 ├── config/
-│   ├── settings.py         # Zentrale Konfiguration
-│   ├── sheet_loader.py     # Google-Sheet CSV laden
-│   └── categories.py       # Kategorie-Erkennung aus Text
+│   ├── settings.py              # Zentrale Konfiguration
+│   ├── publishers.py            # Publisher-URLs, Scraper-Profil, Checks
+│   ├── contacts.yaml            # Ansprechpartner für E-Mails
+│   ├── contacts.py              # YAML-Loader, URL-Lookup
+│   ├── sheet_loader.py          # Google-Sheet CSV laden
+│   ├── reference.py             # Code-/URL-Overrides, dynamische Kategorien
+│   ├── categories.py            # Kategorie-Erkennung aus Deal-Text
+│   └── gmail/                   # OAuth (credentials nicht im Git)
+│       └── README.md
 ├── scraper/
-│   ├── browser.py          # Stealth Playwright-Browser
-│   ├── page_scraper.py     # Codes & Coupon-Buttons extrahieren
-│   └── redirect_checker.py # Affiliate-Redirects auflösen
+│   ├── browser.py               # Stealth Playwright-Browser
+│   ├── page_scraper.py          # Profilspezifisches Scraping & Klicks
+│   └── redirect_checker.py      # Affiliate-Redirects auflösen
 ├── validators/
-│   ├── coupon_validator.py # Code-Validierung (Fallback)
-│   └── url_validator.py    # Redirect vs. Sheet
+│   ├── coupon_validator.py      # Codes auf Seite und in URL
+│   ├── url_validator.py         # Redirect vs. Sheet/Kategorie
+│   └── page_checks.py           # Logo, abgelaufene Aktionen
 ├── reporting/
-│   └── report_generator.py # CSV + HTML
-├── reports/                # Generierte Reports (nicht versionieren)
+│   ├── report_generator.py      # CSV + Excel, triggert E-Mails
+│   ├── email_generator.py       # HTML/EML-Entwürfe
+│   ├── gmail_drafts.py          # Gmail API
+│   ├── screenshot_annotator.py  # Annotierte Fehler-Screenshots
+│   └── templates/               # Jinja2 E-Mail-Vorlagen
+├── reports/                     # Generierte Artefakte (nicht versionieren)
 └── requirements.txt
 ```
 
@@ -131,15 +211,21 @@ flowchart TD
     A[main.py starten] --> B[Google Sheet laden]
     B --> C[Stealth-Browser öffnen]
     C --> D[Für jeden Publisher scrapen]
-    D --> E[Codes + Coupon-Buttons]
-    E --> F[Pro Button: Redirect folgen]
-    F --> G[Kategorie erkennen]
-    G --> H[Vergleich mit Sheet]
+    D --> E[Codes, Buttons, DOM]
+    E --> F{Checks laut Profil}
+    F --> G[Redirects klicken & auflösen]
+    G --> H[Kategorie + Sheet-Vergleich]
     H --> I{OK?}
-    I -->|Nein| J[Screenshot]
+    I -->|Nein| J[Annotierter Screenshot]
     I --> K[Report-Zeile]
     J --> K
-    K --> L[CSV + HTML schreiben]
+    K --> L{Weitere Publisher?}
+    L -->|Ja| D
+    L -->|Nein| M[Excel + CSV]
+    M --> N{Handlungsbedarf + Kontakt?}
+    N -->|Ja| O[HTML/EML + optional Gmail]
+    N -->|Nein| P[Fertig]
+    O --> P
 ```
 
 ---
@@ -149,30 +235,37 @@ flowchart TD
 Module können isoliert getestet werden:
 
 ```bash
-python scraper/browser.py      # Stealth-Test (bot.sannysoft.com)
-python scraper/page_scraper.py # Scraping ShopClever
+python scraper/browser.py       # Stealth-Test (bot.sannysoft.com)
+python scraper/page_scraper.py  # Scraping einzelner Publisher
 python scraper/redirect_checker.py
 python validators/coupon_validator.py
 ```
+
+Publisher temporär aktivieren/deaktivieren: Einträge in `config/publishers.py` aus- oder einkommentieren.
 
 ---
 
 ## Bekannte Einschränkungen
 
-- **Sheet nicht erreichbar:** Redirect-Checks ohne Referenz gelten als OK; Fehlermeldung in der Konsole.
-- **coupons.de:** Anderes DOM — aktuell keine `coupon-listing-item`-Elemente; Erweiterung des Scrapers geplant.
-- **Code-Validierung:** `validate_codes` warnt in der Konsole, fließt aber noch nicht in die Report-Spalten ein.
+- **Sheet nicht erreichbar:** QC läuft mit Fallback-Codes aus `reference.py` / Monatsformel; Redirect-Abgleich gegen das Sheet entfällt teilweise — Warnung in der Konsole.
+- **Deaktivierte Partner:** Shoop (Cashback), Gutscheine.Codes, Spiegel Gutscheine sind vorbereitet, aber in `publishers.py` auskommentiert.
+- **E-Mail ohne Kontakt:** Kein Entwurf, auch wenn Handlungsbedarf im Excel steht — `contacts.yaml` pflegen.
 - **Abhängigkeiten:** `typer` und `httpx` in `requirements.txt` werden im Hauptcode noch nicht genutzt.
 
 ---
 
 ## Abhängigkeiten (Auszug)
 
-- Playwright + playwright-stealth — Browser-Automation
-- BeautifulSoup4 + lxml — HTML-Parsing
-- pandas — Sheet & Reports
-- pydantic-settings — Konfiguration
-- rich — CLI-Ausgabe
+| Paket | Zweck |
+|-------|--------|
+| Playwright + playwright-stealth | Browser-Automation, Anti-Detection |
+| BeautifulSoup4 + lxml | HTML-Parsing |
+| pandas + openpyxl | Sheet, CSV, Excel |
+| Jinja2 + PyYAML | E-Mail-Templates, Kontakte |
+| Pillow | Screenshot-Annotation |
+| google-api-python-client | Gmail-Entwürfe (optional) |
+| pydantic-settings | Konfiguration |
+| rich | CLI-Ausgabe |
 
 ---
 

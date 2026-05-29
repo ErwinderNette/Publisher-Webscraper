@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     report_dir: str = "reports"
     screenshot_dir: str = "reports/screenshots"
 
+    # === Gmail-Entwürfe (Google Workspace) ===
+    gmail_enabled: bool = True
+    gmail_sender: str = "es@uppr.de"
+    gmail_credentials_dir: str = "config/gmail"
+
     @computed_field
     @property
     def current_month_code(self) -> str:

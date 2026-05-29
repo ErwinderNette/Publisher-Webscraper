@@ -1,0 +1,57 @@
+# Publisher-Ansprechpartner für QC-E-Mail-Entwürfe (Lookup per page_url)
+contacts:
+  - publisher_id: 3382
+    publisher_group: Shopclever
+    publisher_company: Shopclever
+    page_url: https://www.shopclever.de/trendtours-gutschein
+    publisher_name: Oliver Klement
+    publisher_email: info@opina.de
+
+  - publisher_id: 1059
+    publisher_group: Coupons
+    publisher_company: Coupons
+    page_url: https://www.coupons.de/gutscheine/trendtours
+    publisher_name: Anna Koutsidis
+    publisher_email: akoutsidis@coupons4u.de
+
+  - publisher_id: 3190
+    publisher_group: Global Savings Group
+    publisher_company: Focus Gutscheine
+    page_url: https://gutscheine.focus.de/gutscheine/trendtours
+    publisher_name: Trang Chau
+    publisher_email: trang.chau@pepper.com
+
+  - publisher_id: 1700
+    publisher_group: Global Savings Group
+    publisher_company: Igraal
+    page_url: https://de.igraal.com/gutschein/trendtours
+    publisher_name: Trang Chau
+    publisher_email: trang.chau@pepper.com
+
+  - publisher_id: 1058
+    publisher_group: Gutscheinrausch
+    publisher_company: Gutscheinrausch
+    page_url: https://www.gutscheinrausch.de/gutscheine/trendtours/
+    publisher_name: Andreas
+    publisher_email: mail@gutscheinrausch.de
+
+  - publisher_id: 1218
+    publisher_group: Welt der Rabatte
+    publisher_company: Welt der Rabatte
+    page_url: https://weltderrabatte.de/shop/trendtours-touristik/
+    publisher_name: Sebastian Roß
+    publisher_email: sebastian.ross@salesbutlers.com
+
+  - publisher_id: 4223
+    publisher_group: Checkout Charlie
+    publisher_company: Sparwelt
+    page_url: https://www.sparwelt.de/gutscheine/trendtours-touristik
+    publisher_name: Jameel Haji Mahmoud
+    publisher_email: jameel.mahmoud@checkout-charlie.com
+
+  - publisher_id: 1158
+    publisher_group: Checkout Charlie
+    publisher_company: Gutscheine.de
+    page_url: https://www.gutscheine.de/trendtours-touristik
+    publisher_name: Jameel Haji Mahmoud
+    publisher_email: jameel.mahmoud@checkout-charlie.com

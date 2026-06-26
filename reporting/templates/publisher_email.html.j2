@@ -5,16 +5,14 @@
   <title>trendtours - Unstimmigkeiten - {{ monat_label }} {{ jahr }}</title>
 </head>
 <body style="font-family: Arial, sans-serif; font-size: 14px; color: #222;">
-  <p>Hey {{ publisher_email }},</p>
+  <p>Hey {{ greeting }},</p>
   <p>
     wir wurden auf kleine Unstimmigkeiten auf eurer Webseite
     (<a href="{{ page_url }}">{{ page_url }}</a>) hingewiesen und würden uns sehr freuen,
     wenn Ihr diese zeitnah korrigieren könntet.
   </p>
   {% for issue in issues %}
-  <p style="margin: 16px 0;">
-    <img src="cid:{{ issue.cid }}" alt="Fehlerbereich" style="max-width: 100%; border: 2px solid #dc2626;">
-  </p>
+  <p style="margin: 16px 0 4px 0;"><strong>{{ issue.label }}</strong></p>
   <p style="margin: 4px 0 20px 0;">-&gt; {{ issue.instruction }}</p>
   {% endfor %}
   <p>Vielen Dank für die Umsetzung &amp; Viele Grüße</p>

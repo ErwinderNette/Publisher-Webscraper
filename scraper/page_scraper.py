@@ -4,6 +4,7 @@ Unterstützt ShopClever-Layout, coupons.de und generischen Fallback.
 """
 import asyncio
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urljoin
@@ -69,17 +70,21 @@ GUTSCHEINE_DE_DEAL_PATTERNS = (
 WELT_DER_RABATTE_COUPON_TITLE = re.compile(r"1\s*000.*rabatt.*pro\s*person", re.I)
 WELT_DER_RABATTE_COUPON_ID_RE = re.compile(r"\?c=(\d+)|/go/(\d+)/")
 
-# iGraal: vier markierte Angebote (ohne Cashback-Zeile oben)
+# iGraal: drei QC-Hauptangebote (1.000€-Code, Top-Angebote, Bestpreis)
+IGRAAL_OFFER_CONTAINER = '[data-testid="offer-card-list-container"]'
+IGRAAL_OFFER_CARD = f"{IGRAAL_OFFER_CONTAINER} .horizontalbasecard"
 IGRAAL_VOUCHER_HASH_RE = re.compile(r"#voucher-([a-f0-9-]{36})", re.I)
 IGRAAL_AFF_BUTTON_RE = re.compile(r"^AFF\d{4}$", re.I)
+IGRAAL_CODE_DEAL_RE = re.compile(r"bis zu.*1[\s.,]*000.*gutschein", re.I)
+IGRAAL_CODE_CTA_RE = re.compile(r"Code anzeigen", re.I)
+IGRAAL_DEAL_CTA_RE = re.compile(r"Deal sichern", re.I)
 IGRAAL_EXCLUDED_TITLES = (
-    re.compile(r"cashback", re.I),
+    re.compile(r"^bis zu\s+\d.*cashback", re.I),
     re.compile(r"abgelaufen", re.I),
     re.compile(r"boost des tages", re.I),
 )
 IGRAAL_DEAL_PATTERNS = (
-    re.compile(r"1000.*gutschein\s*ein", re.I),
-    re.compile(r"500.*rabattcode", re.I),
+    IGRAAL_CODE_DEAL_RE,
     re.compile(r"top-angebote.*woche", re.I),
     re.compile(r"bestpreis.*monat", re.I),
 )
@@ -1054,18 +1059,71 @@ class PublisherScraper:
         ) + _COMMON_CONSENT_SELECTORS
         await self._click_first_visible(target, igraal_selectors)
 
+    def _igraal_offer_cards(self, page):
+        return page.locator(IGRAAL_OFFER_CARD)
+
+    async def _igraal_card_title(self, card) -> str:
+        for sel in ('#offerbasecard-title', '[id="offerbasecard-title"]', "h3"):
+            title_el = card.locator(sel).first
+            if await title_el.count() > 0:
+                text = (await title_el.inner_text()).strip()
+                if text:
+                    return text
+
+        text = await card.evaluate(
+            """el => {
+                const title = el.querySelector(
+                    '#offerbasecard-title, [id="offerbasecard-title"], h3'
+                );
+                if (title) return title.innerText.trim();
+                const lines = (el.innerText || '')
+                    .split('\\n')
+                    .map(l => l.trim())
+                    .filter(Boolean);
+                for (const line of lines) {
+                    if (
+                        line.length > 25 &&
+                        /rabatt|sparen|gutschein|angebot|reise/i.test(line)
+                    ) {
+                        return line;
+                    }
+                }
+                return lines.find(l => l.length > 20) || '';
+            }"""
+        )
+        return (text or "").strip()
+
     async def _collect_igraal_deals(self, page) -> list[dict]:
         entries: list[dict] = []
-        headings = page.locator("h3")
-        for i in range(await headings.count()):
-            title = (await headings.nth(i).inner_text()).strip()
+        cards = self._igraal_offer_cards(page)
+        card_count = await cards.count()
+
+        if card_count == 0:
+            headings = page.locator("h3")
+            for i in range(await headings.count()):
+                title = (await headings.nth(i).inner_text()).strip()
+                if not title or self._igraal_is_excluded(title):
+                    if title and self._igraal_is_excluded(title):
+                        print(f"   ⏭️ Übersprungen: {title[:55]}...")
+                    continue
+                if not self._igraal_matches_deal(title):
+                    continue
+                is_code = bool(
+                    IGRAAL_CODE_DEAL_RE.search(self._igraal_normalize_title(title))
+                )
+                entries.append({"index": i, "title": title, "is_code": is_code})
+            return entries
+
+        for i in range(card_count):
+            card = cards.nth(i)
+            title = await self._igraal_card_title(card)
             if not title or self._igraal_is_excluded(title):
                 if title and self._igraal_is_excluded(title):
                     print(f"   ⏭️ Übersprungen: {title[:55]}...")
                 continue
             if not self._igraal_matches_deal(title):
                 continue
-            is_code = bool(re.search(r"gutschein\s*ein|rabattcode", title, re.I))
+            is_code = bool(IGRAAL_CODE_DEAL_RE.search(self._igraal_normalize_title(title)))
             entries.append({"index": i, "title": title, "is_code": is_code})
         return entries
 
@@ -1077,48 +1135,55 @@ class PublisherScraper:
                     return pg.url
         return None
 
-    async def _igraal_find_heading(self, page, title: str):
-        headings = page.locator("h3")
-        for i in range(await headings.count()):
-            heading_title = (await headings.nth(i).inner_text()).strip()
-            if heading_title == title:
-                return headings.nth(i)
-        return page.locator("h3").filter(has_text=re.compile(title[:30], re.I)).first
-
-    async def _igraal_code_button_for_title(self, page, title: str):
-        """„Code anzeigen“-Button anhand des zugehörigen h3-Titels finden."""
+    async def _igraal_find_card_for_title(self, page, title: str):
+        """Angebotskarte anhand des Titels oder Deal-Patterns finden."""
         normalized_title = " ".join(title.split())
-        deal_pattern = next(
-            (p for p in IGRAAL_DEAL_PATTERNS if p.search(normalized_title.lower())), None
-        )
-        buttons = page.locator('button:has-text("Code anzeigen")')
-        for i in range(await buttons.count()):
-            nearby_title = await buttons.nth(i).evaluate(
-                """el => {
-                    let node = el;
-                    for (let depth = 0; depth < 15; depth++) {
-                        node = node.parentElement;
-                        if (!node) break;
-                        const heading = node.querySelector("h3");
-                        if (heading) return heading.innerText;
-                    }
-                    return "";
-                }"""
-            )
-            nearby_norm = " ".join(nearby_title.split())
-            if self._igraal_is_excluded(nearby_norm):
-                continue
-            if nearby_norm == normalized_title:
-                return buttons.nth(i)
-            if deal_pattern and deal_pattern.search(nearby_norm.lower()):
-                return buttons.nth(i)
+        deal_pattern = self._igraal_deal_pattern_for_title(title)
+        cards = self._igraal_offer_cards(page)
+        card_count = await cards.count()
 
-        # Fallback: feste Reihenfolge auf der Merchant-Seite (1000€ = 0, 500€ = 1)
-        count = await buttons.count()
-        if re.search(r"1000.*gutschein\s*ein", normalized_title, re.I) and count >= 1:
-            return buttons.nth(0)
-        if re.search(r"500.*rabattcode", normalized_title, re.I) and count >= 2:
-            return buttons.nth(1)
+        if card_count == 0:
+            headings = page.locator("h3")
+            for i in range(await headings.count()):
+                heading_title = (await headings.nth(i).inner_text()).strip()
+                heading_norm = " ".join(heading_title.split())
+                heading_cmp = self._igraal_normalize_title(heading_norm)
+                if heading_norm == normalized_title:
+                    return headings.nth(i)
+                if deal_pattern and deal_pattern.search(heading_cmp):
+                    return headings.nth(i)
+            return page.locator("h3").filter(has_text=re.compile(title[:30], re.I)).first
+
+        for i in range(card_count):
+            card = cards.nth(i)
+            card_title = await self._igraal_card_title(card)
+            if not card_title:
+                continue
+            card_norm = " ".join(card_title.split())
+            card_cmp = self._igraal_normalize_title(card_norm)
+            if self._igraal_is_excluded(card_norm):
+                continue
+            if card_norm == normalized_title:
+                return card
+            if deal_pattern and deal_pattern.search(card_cmp):
+                return card
+        return None
+
+    async def _igraal_cta_for_card(self, card, is_code: bool):
+        """CTA innerhalb einer Angebotskarte (role=button oder Fallback)."""
+        cta_pattern = IGRAAL_CODE_CTA_RE if is_code else IGRAAL_DEAL_CTA_RE
+        cta = card.get_by_role("button", name=cta_pattern)
+        if await cta.count() > 0:
+            return cta.first
+
+        label = "Code anzeigen" if is_code else "Deal sichern"
+        fallback = card.locator(f'[role="button"]:has-text("{label}")')
+        if await fallback.count() > 0:
+            return fallback.first
+
+        text_match = card.get_by_text(cta_pattern)
+        if await text_match.count() > 0:
+            return text_match.first
         return None
 
     async def _igraal_click_code_offer(
@@ -1128,16 +1193,19 @@ class PublisherScraper:
         codes: set[str] = set()
         voucher_id: Optional[str] = None
 
-        cta = None
+        card = None
         for _ in range(3):
-            cta = await self._igraal_code_button_for_title(page, title)
-            if cta is not None:
+            card = await self._igraal_find_card_for_title(page, title)
+            if card is not None:
                 break
             await page.wait_for_timeout(2000)
-        if cta is None:
-            print(f"      ⚠️ iGraal: Code-Button für „{title[:40]}…“ nicht gefunden.")
+        if card is None:
+            print(f"      ⚠️ iGraal: Code-Angebot „{title[:40]}…“ nicht gefunden.")
             return None, None, codes
 
+        cta = await self._igraal_cta_for_card(card, is_code=True)
+        if cta is None:
+            cta = card
         await cta.scroll_into_view_if_needed()
         await page.wait_for_timeout(400)
 
@@ -1179,7 +1247,13 @@ class PublisherScraper:
             click_code = aff_codes[0]
 
         if click_code:
-            await overlay.locator("button", has_text=click_code).first.click(force=True)
+            aff_btn = overlay.locator("button", has_text=click_code).first
+            await aff_btn.scroll_into_view_if_needed()
+            await overlay.wait_for_timeout(300)
+            try:
+                await aff_btn.click(force=True, timeout=10000)
+            except Exception:
+                await aff_btn.evaluate("el => el.click()")
             final_url = await self._igraal_poll_trendtours(overlay.context)
             try:
                 await overlay.close()
@@ -1195,46 +1269,19 @@ class PublisherScraper:
             pass
         return voucher_id, None, codes
 
-    async def _igraal_deal_button_for_title(self, page, title: str):
-        normalized_title = " ".join(title.split())
-        deal_pattern = next(
-            (p for p in IGRAAL_DEAL_PATTERNS if p.search(normalized_title.lower())), None
-        )
-        buttons = page.locator(
-            'button:has-text("Deal sichern"), a:has-text("Deal sichern")'
-        )
-        for i in range(await buttons.count()):
-            nearby_title = await buttons.nth(i).evaluate(
-                """el => {
-                    let node = el;
-                    for (let depth = 0; depth < 15; depth++) {
-                        node = node.parentElement;
-                        if (!node) break;
-                        const heading = node.querySelector("h3");
-                        if (heading) return heading.innerText;
-                    }
-                    return "";
-                }"""
-            )
-            nearby_norm = " ".join(nearby_title.split())
-            if self._igraal_is_excluded(nearby_norm):
-                continue
-            if nearby_norm == normalized_title:
-                return buttons.nth(i)
-            if deal_pattern and deal_pattern.search(nearby_norm.lower()):
-                return buttons.nth(i)
-        return None
-
     async def _igraal_click_deal_offer(
         self, page, title: str, heading_index: int
     ) -> tuple[Optional[str], set[str]]:
         """Deal-Angebot: „Deal sichern“ → trendtours."""
         codes: set[str] = set()
-        cta = await self._igraal_deal_button_for_title(page, title)
-        if cta is None:
-            print(f"      ⚠️ iGraal: Deal-Button für „{title[:40]}…“ nicht gefunden.")
+        card = await self._igraal_find_card_for_title(page, title)
+        if card is None:
+            print(f"      ⚠️ iGraal: Deal-Angebot „{title[:40]}…“ nicht gefunden.")
             return None, codes
 
+        cta = await self._igraal_cta_for_card(card, is_code=False)
+        if cta is None:
+            cta = card
         await cta.scroll_into_view_if_needed()
         await page.wait_for_timeout(400)
 
@@ -1255,20 +1302,46 @@ class PublisherScraper:
                 except Exception:
                     pass
 
-    async def _igraal_prepare_deal_page(
-        self, deal_page, page_base: str, title: str, is_code: bool
-    ) -> None:
-        await deal_page.goto(page_base, wait_until="domcontentloaded", timeout=90000)
-        await self._igraal_dismiss_consent(deal_page)
-        await deal_page.locator("h3").filter(has_text=re.compile(title[:25], re.I)).first.wait_for(
-            state="visible", timeout=25000
-        )
-        heading = deal_page.locator("h3").filter(
-            has_text=re.compile(title[:25], re.I)
-        ).first
-        await heading.scroll_into_view_if_needed()
-        await self._igraal_dismiss_consent(deal_page)
-        await deal_page.wait_for_timeout(1500)
+    @staticmethod
+    def _igraal_normalize_title(title: str) -> str:
+        return " ".join(title.split()).lower().replace("€", "")
+
+    def _igraal_deal_pattern_for_title(self, title: str) -> Optional[re.Pattern]:
+        normalized = self._igraal_normalize_title(title)
+        return next((p for p in IGRAAL_DEAL_PATTERNS if p.search(normalized)), None)
+
+    async def _igraal_wait_for_deal_card(self, page, title: str, timeout_ms: int = 45000):
+        """Nach Reload: Angebotskarte per Polling finden (lazy load / Consent)."""
+        deadline = time.monotonic() + timeout_ms / 1000
+
+        while time.monotonic() < deadline:
+            for _ in range(2):
+                await self._igraal_dismiss_consent(page)
+                await page.wait_for_timeout(400)
+
+            card = await self._igraal_find_card_for_title(page, title)
+            if card is not None:
+                await card.scroll_into_view_if_needed()
+                await card.wait_for(state="visible", timeout=5000)
+                return card
+
+            await page.evaluate("window.scrollBy(0, 500)")
+            await page.wait_for_timeout(1000)
+
+        raise TimeoutError(f"iGraal: Angebot „{title[:55]}“ nach Reload nicht sichtbar")
+
+    async def _igraal_scroll_to_deal(self, page, title: str) -> None:
+        await self._igraal_wait_for_deal_card(page, title)
+        await self._igraal_dismiss_consent(page)
+        await page.wait_for_timeout(800)
+
+    async def _igraal_reset_to_merchant(self, page_base: str) -> None:
+        await self._igraal_close_extra_tabs(self.page)
+        await self.page.goto(page_base, wait_until="load", timeout=90000)
+        await self.page.wait_for_timeout(1500)
+        for _ in range(3):
+            await self._igraal_dismiss_consent(self.page)
+            await self.page.wait_for_timeout(400)
 
     async def _process_igraal_deal(
         self,
@@ -1280,7 +1353,7 @@ class PublisherScraper:
     ) -> tuple[ButtonLink, set[str]]:
         title = entry["title"]
         await self._igraal_close_extra_tabs(deal_page)
-        await self._igraal_prepare_deal_page(deal_page, page_base, title, entry["is_code"])
+        await self._igraal_scroll_to_deal(deal_page, title)
 
         voucher_id: Optional[str] = None
         final_url: Optional[str] = None
@@ -1317,38 +1390,40 @@ class PublisherScraper:
     async def _scrape_igraal_playwright(
         self, base_url: str
     ) -> tuple[list[ButtonLink], set[str]]:
-        """iGraal: vier markierte Angebote – Voucher-Overlay und Redirect prüfen."""
+        """iGraal: drei QC-Hauptangebote – Voucher-Overlay und Redirect prüfen."""
         page_base = base_url.split("#")[0]
         await self.page.set_viewport_size(IGRAAL_DESKTOP_VIEWPORT)
-        await self._igraal_dismiss_consent()
+        for _ in range(3):
+            await self._igraal_dismiss_consent()
+            await self.page.wait_for_timeout(500)
+        try:
+            await self.page.locator(IGRAAL_OFFER_CONTAINER).wait_for(
+                state="visible", timeout=30000
+            )
+        except Exception:
+            try:
+                await self.page.locator(".horizontalbasecard").first.wait_for(
+                    state="visible", timeout=30000
+                )
+            except Exception:
+                await self.page.locator("h3").first.wait_for(state="visible", timeout=30000)
         deals = await self._collect_igraal_deals(self.page)
         print(f"   📦 {len(deals)} iGraal-Hauptangebote")
 
         all_codes: set[str] = set()
         buttons: list[ButtonLink] = []
-        browser = self.page.context.browser
 
         for idx, entry in enumerate(deals):
-            if entry["is_code"]:
-                # Pro Code-Angebot eigener Context (iGraal zeigt sonst keine zweite Liste)
-                code_context = await browser.new_context()
-                deal_page = await code_context.new_page()
-                await deal_page.set_viewport_size(IGRAAL_DESKTOP_VIEWPORT)
-                try:
-                    btn, codes = await self._process_igraal_deal(
-                        entry, deal_page, page_base, idx + 1, len(deals)
-                    )
-                    all_codes.update(codes)
-                    buttons.append(btn)
-                finally:
-                    await code_context.close()
+            if idx > 0:
+                await self._igraal_reset_to_merchant(page_base)
             else:
                 await self._igraal_close_extra_tabs(self.page)
-                btn, codes = await self._process_igraal_deal(
-                    entry, self.page, page_base, idx + 1, len(deals)
-                )
-                all_codes.update(codes)
-                buttons.append(btn)
+
+            btn, codes = await self._process_igraal_deal(
+                entry, self.page, page_base, idx + 1, len(deals)
+            )
+            all_codes.update(codes)
+            buttons.append(btn)
 
         return buttons, all_codes
 

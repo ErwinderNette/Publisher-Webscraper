@@ -6,7 +6,9 @@
 4. **Credentials** → **Create Credentials** → **OAuth client ID** → **Desktop app** (nicht „Web application“ / nicht der n8n-Client)
 5. JSON herunterladen als `credentials.json` in diesen Ordner legen  
    Die Datei muss `"installed": { ... }` enthalten (nicht nur `"web":`).
-6. Beim ersten QC-Lauf mit Handlungsbedarf: Browser öffnet sich → mit **`es@uppr.de`** anmelden (nicht privates Gmail) → `token.json` wird gespeichert
+6. Beim ersten QC-Lauf mit Handlungsbedarf öffnet sich der Browser für OAuth:
+   - **`js@uppr.de`** → Publisher-Entwürfe (`token_js.json`)
+   - **`es@uppr.de`** → Versand der QC-Benachrichtigung (`token_es.json`, Legacy: `token.json`)
 
 ### Fehler `name: gmail  version: v1` oder Gmail-Entwürfe schlagen fehl
 
@@ -24,8 +26,13 @@ Ursache: `credentials.json` ist ein **Web-Client** (z. B. Redirect nur `https://
 
 **Lösung:** Neuen OAuth-Client **Desktop app** anlegen, JSON ersetzen, ggf. altes `token.json` löschen, QC erneut starten.
 
-### Konto `es@uppr.de`
+### Konten
 
-Beim OAuth-Fenster „Anderes Konto“ wählen und `es@uppr.de` verwenden. Welches Konto du autorisierst, bestimmt, in welchem Postfach die Entwürfe landen.
+| Konto | Zweck | Token-Datei |
+|-------|--------|-------------|
+| `js@uppr.de` | Publisher-Entwürfe | `token_js.json` |
+| `es@uppr.de` | Versand QC-Benachrichtigung | `token_es.json` |
+
+Beim OAuth-Fenster das angezeigte Konto verwenden („Anderes Konto“ falls nötig). Welches Konto du autorisierst, bestimmt das jeweilige Postfach.
 
 Deaktivieren ohne API: in `config/settings.py` → `gmail_enabled = False` (`.eml`/`.html` bleiben verfügbar).

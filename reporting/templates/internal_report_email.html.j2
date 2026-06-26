@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>trendtours QC – Report {{ monat_label }} {{ jahr }}</title>
+</head>
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: #222;">
+  <p>Hey {{ notify_name }},</p>
+  <p>
+    der Qualitätscheck für trendtours wurde erfolgreich durchgeführt.
+    Im Anhang dieser E-Mail findest du den monatsaktuellen Report für
+    <strong>{{ monat_label }} {{ jahr }}</strong>.
+  </p>
+  {% if publisher_draft_count > 0 %}
+  <p>
+    Für Publisher mit Handlungsbedarf liegen <strong>{{ publisher_draft_count }}</strong>
+    E-Mail-Entwürfe in deinem Gmail-Postfach bereit – dort kannst du sie vor dem Versand
+    noch einmal prüfen.
+  </p>
+  {% else %}
+  <p>
+    Bei den geprüften Publishern bestand kein Handlungsbedarf –
+    es wurden keine Publisher-Mails erstellt.
+  </p>
+  {% endif %}
+  <p>Viele Grüße</p>
+</body>
+</html>

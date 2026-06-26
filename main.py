@@ -1,7 +1,11 @@
+import argparse
 import asyncio
 import os
 import re
+import json
+import requests
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from rich.console import Console
 
@@ -24,6 +28,102 @@ from reporting.screenshot_annotator import capture_issue_screenshot
 
 console = Console()
 CODE_RE = re.compile(r"(?:AFF|KUP)\d{4}", re.IGNORECASE)
+
+MONDAY_STATUS_OK = "✅ Erfolgreich"
+MONDAY_STATUS_ERROR = "🚨 Fehler"
+MONDAY_STATUS_LABELS = frozenset({MONDAY_STATUS_OK, MONDAY_STATUS_ERROR})
+
+
+def update_monday_status(status_label: str) -> bool:
+    """Aktualisiert Status und Zeitstempel im Monday-Board. Gibt True bei Erfolg zurück."""
+    if status_label not in MONDAY_STATUS_LABELS:
+        console.print(
+            f"[red]❌ Ungültiger Monday-Status: {status_label!r} "
+            f"(erlaubt: {MONDAY_STATUS_OK!r}, {MONDAY_STATUS_ERROR!r})[/red]"
+        )
+        return False
+
+    if not settings.monday_api_token:
+        console.print("[red]❌ Monday API-Token fehlt (settings.monday_api_token / MONDAY_API_TOKEN).[/red]")
+        return False
+
+    console.print(f"[bold cyan]Sende Status an monday.com: {status_label}[/bold cyan]")
+
+    berlin_tz = ZoneInfo(settings.monday_timezone)
+    berlin_now = datetime.now(berlin_tz)
+    utc_now = berlin_now.astimezone(ZoneInfo("UTC"))
+    date_str = berlin_now.strftime("%Y-%m-%d")
+    time_str = utc_now.strftime("%H:%M:%S")
+
+    console.print(
+        f"[dim]   Datum (DE): {date_str} {berlin_now.strftime('%H:%M:%S')} "
+        f"→ API-Zeit (UTC): {time_str}[/dim]"
+    )
+
+    column_values = json.dumps({
+        settings.monday_status_column: {"label": status_label},
+        settings.monday_date_column: {"date": date_str, "time": time_str},
+    })
+
+    graphql_query = """
+    mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(
+            board_id: $boardId,
+            item_id: $itemId,
+            column_values: $columnValues
+        ) { id }
+    }
+    """
+
+    payload = {
+        "query": graphql_query,
+        "variables": {
+            "boardId": settings.monday_board_id,
+            "itemId": settings.monday_item_id,
+            "columnValues": column_values,
+        },
+    }
+
+    headers = {
+        "Authorization": settings.monday_api_token,
+        "Content-Type": "application/json",
+        "API-Version": "2024-01",
+    }
+
+    try:
+        response = requests.post(
+            "https://api.monday.com/v2",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+        response.raise_for_status()
+        body = response.json()
+
+        if body.get("errors"):
+            for err in body["errors"]:
+                console.print(f"[red]❌ Monday API-Fehler: {err.get('message', err)}[/red]")
+            console.print(f"[dim]   Vollständige Antwort: {json.dumps(body, ensure_ascii=False)}[/dim]")
+            return False
+
+        item_id = (body.get("data") or {}).get("change_multiple_column_values", {}).get("id")
+        if not item_id:
+            console.print("[red]❌ Monday-Antwort ohne Item-ID – Update vermutlich fehlgeschlagen.[/red]")
+            console.print(f"[dim]   Vollständige Antwort: {json.dumps(body, ensure_ascii=False)}[/dim]")
+            return False
+
+        console.print(
+            f"[green]✓ Monday-Board aktualisiert (Item {item_id}, Board {settings.monday_board_id}).[/green]"
+        )
+        return True
+    except requests.RequestException as e:
+        console.print(f"[red]❌ Netzwerkfehler beim Monday-Update: {e}[/red]")
+        if getattr(e, "response", None) is not None:
+            console.print(f"[dim]   Antwort: {e.response.text[:500]}[/dim]")
+        return False
+    except Exception as e:
+        console.print(f"[red]❌ Fehler beim Update von monday.com: {e}[/red]")
+        return False
 
 
 def _slug(name: str) -> str:
@@ -363,4 +463,36 @@ async def run_qc_checks():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_qc_checks())
+    parser = argparse.ArgumentParser(description="Trendtours QC Scraper")
+    parser.add_argument(
+        "--monday-only",
+        action="store_true",
+        help="Nur Monday-Board-Update testen (ohne QC-Lauf)",
+    )
+    parser.add_argument(
+        "--monday-status",
+        choices=["erfolg", "fehler"],
+        default="erfolg",
+        help="Status für --monday-only (Standard: erfolg)",
+    )
+    args = parser.parse_args()
+
+    monday_status_map = {
+        "erfolg": MONDAY_STATUS_OK,
+        "fehler": MONDAY_STATUS_ERROR,
+    }
+
+    if args.monday_only:
+        ok = update_monday_status(monday_status_map[args.monday_status])
+        raise SystemExit(0 if ok else 1)
+
+    try:
+        asyncio.run(run_qc_checks())
+        if not update_monday_status(MONDAY_STATUS_OK):
+            raise SystemExit(1)
+    except SystemExit:
+        raise
+    except Exception as e:
+        console.print(f"\n[bold red]Kritischer Fehler im Hauptprogramm: {e}[/bold red]")
+        update_monday_status(MONDAY_STATUS_ERROR)
+        raise SystemExit(1) from e

@@ -36,7 +36,21 @@ class Settings(BaseSettings):
     # === Gmail-Entwürfe (Google Workspace) ===
     gmail_enabled: bool = True
     gmail_sender: str = "es@uppr.de"
+    gmail_drafts_mailbox: str = "js@uppr.de"
     gmail_credentials_dir: str = "config/gmail"
+    qc_report_recipient: str = "js@uppr.de"
+    qc_notify_name: str = "Janine"
+
+    # === Monday.com Status-Update ===
+    # Token optional per Umgebungsvariable MONDAY_API_TOKEN überschreiben
+    monday_api_token: str = (
+        "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjY3MzY1Nzg5MSwiYWFpIjoxMSwidWlkIjo3Nzg1Mzc5OCwiaWFkIjoiMjAyNi0wNi0yMlQwOTozNzowNC4wNjJaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MjgyODA5NjQsInJnbiI6ImV1YzEifQ.M2TtpipPGK776CFN6qfVR_QL5zWcIXR36zoJPFaOKEU"
+    )
+    monday_board_id: str = "5098797869"
+    monday_item_id: str = "3007938816"
+    monday_status_column: str = "color_mm4fzfbf"
+    monday_date_column: str = "date_mm4ffbac"
+    monday_timezone: str = "Europe/Berlin"
 
     @computed_field
     @property

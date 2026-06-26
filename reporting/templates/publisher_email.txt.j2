@@ -1,12 +1,11 @@
 Betreff: trendtours - Unstimmigkeiten - {{ monat_label }} {{ jahr }}
 
-Hey {{ publisher_email }},
+Hey {{ greeting }},
 
 wir wurden auf kleine Unstimmigkeiten auf eurer Webseite ({{ page_url }}) hingewiesen und würden uns sehr freuen, wenn Ihr diese zeitnah korrigieren könntet.
 
 {% for issue in issues %}
-[Screenshot: {{ issue.image_filename }}]
-
+{{ issue.label }}
 -> {{ issue.instruction }}
 
 {% endfor %}

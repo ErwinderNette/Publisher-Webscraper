@@ -1,0 +1,13 @@
+Betreff: trendtours QC – Report {{ monat_label }} {{ jahr }}
+
+Hey {{ notify_name }},
+
+der Qualitätscheck für trendtours wurde erfolgreich durchgeführt. Im Anhang dieser E-Mail findest du den monatsaktuellen Report für {{ monat_label }} {{ jahr }}.
+
+{% if publisher_draft_count > 0 %}
+Für Publisher mit Handlungsbedarf liegen {{ publisher_draft_count }} E-Mail-Entwürfe in deinem Gmail-Postfach bereit – dort kannst du sie vor dem Versand noch einmal prüfen.
+{% else %}
+Bei den geprüften Publishern bestand kein Handlungsbedarf – es wurden keine Publisher-Mails erstellt.
+{% endif %}
+
+Viele Grüße

@@ -1,8 +1,7 @@
 """
-Gmail API: Entwürfe in es@uppr.de (Google Workspace, OAuth Desktop Flow).
+Gmail API: Entwürfe in js@uppr.de, Versand von es@uppr.de (OAuth Desktop Flow).
 """
 import base64
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +11,12 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build, build_from_document
 from googleapiclient.errors import HttpError, UnknownApiNameOrVersion
 
-from reporting.email_generator import PublisherEmailDraft, _build_mime_message
+from reporting.email_generator import (
+    InternalReportDraft,
+    PublisherEmailDraft,
+    _build_internal_mime_message,
+    _build_publisher_mime_message,
+)
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.compose"]
 
@@ -44,10 +48,25 @@ def _credentials_path() -> Path:
     return Path(settings.gmail_credentials_dir) / "credentials.json"
 
 
-def _token_path() -> Path:
+def _token_path_for(account: str) -> Path:
     from config.settings import settings
 
-    return Path(settings.gmail_credentials_dir) / "token.json"
+    local = account.split("@", 1)[0]
+    return Path(settings.gmail_credentials_dir) / f"token_{local}.json"
+
+
+def _resolve_token_path(account: str) -> Path:
+    """Pro Konto token_{local}.json; Legacy token.json nur für gmail_sender."""
+    from config.settings import settings
+
+    token_file = _token_path_for(account)
+    if token_file.is_file():
+        return token_file
+    if account == settings.gmail_sender:
+        legacy = Path(settings.gmail_credentials_dir) / "token.json"
+        if legacy.is_file():
+            return legacy
+    return token_file
 
 
 def _find_gmail_discovery_json() -> Optional[Path]:
@@ -91,9 +110,9 @@ def _build_gmail_service(creds):
     )
 
 
-def get_gmail_service():
+def get_gmail_service(for_account: str):
     creds = None
-    token_file = _token_path()
+    token_file = _resolve_token_path(for_account)
     creds_file = _credentials_path()
 
     if token_file.is_file():
@@ -108,10 +127,12 @@ def get_gmail_service():
                     f"Gmail OAuth: {creds_file} fehlt. Siehe README (Gmail-Setup)."
                 )
             _validate_credentials_file(creds_file)
+            print(f"\n🔐 Gmail OAuth: Bitte mit **{for_account}** anmelden …")
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
             creds = flow.run_local_server(port=0)
-        token_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(token_file, "w", encoding="utf-8") as f:
+        canonical = _token_path_for(for_account)
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        with open(canonical, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
 
     try:
@@ -131,30 +152,55 @@ def _message_to_raw(msg) -> str:
     return base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
 
+def _create_gmail_draft(service, mime) -> str:
+    body = {"message": {"raw": _message_to_raw(mime)}}
+    created = service.users().drafts().create(userId="me", body=body).execute()
+    return created.get("id", "")
+
+
 def create_gmail_drafts(
     drafts: list[PublisherEmailDraft],
-    csv_path: str,
     from_addr: str,
 ) -> list[str]:
-    """Legt pro Publisher einen Gmail-Entwurf an. Gibt Draft-IDs zurück."""
-    service = get_gmail_service()
+    """Legt pro Publisher einen Gmail-Entwurf im Entwürfe-Postfach an."""
+    from config.settings import settings
+
+    mailbox = settings.gmail_drafts_mailbox
+    service = get_gmail_service(mailbox)
     draft_ids: list[str] = []
 
     for draft in drafts:
-        mime = _build_mime_message(draft, csv_path, from_addr)
-        body = {"message": {"raw": _message_to_raw(mime)}}
-        created = (
-            service.users()
-            .drafts()
-            .create(userId="me", body=body)
-            .execute()
-        )
-        draft_id = created.get("id", "")
+        mime = _build_publisher_mime_message(draft, from_addr)
+        draft_id = _create_gmail_draft(service, mime)
         draft_ids.append(draft_id)
         print(
             f"   ✓ Gmail-Entwurf: {draft.publisher} → {draft.contact.publisher_email} "
             f"(Draft-ID: {draft_id})"
         )
 
-    print(f"\n📬 {len(draft_ids)} Gmail-Entwürfe in {from_addr} angelegt.")
+    print(f"\n📬 {len(draft_ids)} Publisher-Gmail-Entwürfe in {mailbox} angelegt.")
     return draft_ids
+
+
+def send_internal_report_email(
+    draft: InternalReportDraft,
+    csv_path: str,
+    from_addr: str,
+) -> str:
+    """Sendet die interne QC-Benachrichtigung mit CSV-Anhang (kein Entwurf)."""
+    from config.settings import settings
+
+    service = get_gmail_service(settings.gmail_sender)
+    mime = _build_internal_mime_message(draft, csv_path, from_addr)
+    sent = (
+        service.users()
+        .messages()
+        .send(userId="me", body={"raw": _message_to_raw(mime)})
+        .execute()
+    )
+    message_id = sent.get("id", "")
+    print(
+        f"   ✓ E-Mail gesendet: {from_addr} → {draft.recipient} "
+        f"(Message-ID: {message_id})"
+    )
+    return message_id

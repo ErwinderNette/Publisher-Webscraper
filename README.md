@@ -44,7 +44,7 @@ Ansprechpartner für E-Mails: [`config/contacts.yaml`](config/contacts.yaml) (Lo
 | `shopclever` | Eigenes DOM; Logo- und Abgelaufen-Check |
 | `coupons_de` | Playwright: Merchant-Showbox, Klick auf Code-Buttons |
 | `focus_gsg` | Nur `data-testid="active-vouchers-widget"`; Desktop-Viewport für Klicks |
-| `igraal` | Vier markierte Deals; Code- und Deal-Buttons per Playwright |
+| `igraal` | Drei QC-Hauptangebote (1.000€-Code, Top-Angebote, Bestpreis); Playwright-Klicks |
 | `sparwelt` / `gutscheine_de` | Checkout-Charlie-Layout; drei Hauptangebote |
 | `welt_der_rabatte` | Ein Haupt-Coupon mit `/go/`-Redirect |
 | `gutscheinrausch` | Drei markierte Angebote (Desktop-Viewport) |
@@ -101,21 +101,24 @@ Nach jedem QC-Lauf erzeugt das Tool **fertige Entwürfe**, sofern ein Publisher 
 | Ausgabe | Beschreibung |
 |---------|----------------|
 | `{publisher}.html` | Vorschau / Copy-Paste |
-| `{publisher}.eml` | Import in Outlook/Apple Mail (Screenshots inline + CSV-Anhang) |
-| Gmail-Entwurf | Optional im Postfach `es@uppr.de`, `To:` = Publisher-Kontakt |
+| `{publisher}.eml` | Import in Outlook/Apple Mail (ohne Report-Anhang) |
+| `internal_report.eml` | Vorschau der internen Benachrichtigung an `js@uppr.de` |
+| Gmail | Publisher-Entwürfe in `js@uppr.de`; QC-Report wird von `es@uppr.de` an `js@uppr.de` gesendet |
 
-**Ansprache:** `Hey {publisher_email},` (E-Mail-Adresse aus der Kontaktliste).
+**Publisher-Ansprache:** `Hey {Vorname},` aus `publisher_name` in `contacts.yaml` (z. B. „Sebastian Roß“ → „Hey Sebastian“); ohne erkennbaren Namen → `Hey zusammen,`.
 
-**Betreff:** `trendtours - Unstimmigkeiten - {Monat} {Jahr}`
+**Publisher-Inhalt:** Pro Fehlerpunkt der Gutscheinname (`Angebot` aus dem QC-Report) plus Handlungsanweisung — keine Screenshots, kein CSV-Anhang.
 
-**Anhänge:** vollständige `QC_Report_*.csv` des Laufs (zur Nachprüfung).
+**Publisher-Betreff:** `trendtours - Unstimmigkeiten - {Monat} {Jahr}`
+
+**Interner Report:** Nach jedem Lauf wird eine E-Mail von `es@uppr.de` an `js@uppr.de` **gesendet** – mit `QC_Report_*.csv` im Anhang und Hinweis auf die Publisher-Entwürfe in Gmail.
 
 Ohne Eintrag in `contacts.yaml` werden für diesen Publisher **keine** E-Mails erzeugt (Report bleibt unverändert).
 
 ### Gmail-Setup (Google Workspace)
 
 Einmalige Einrichtung: [`config/gmail/README.md`](config/gmail/README.md)  
-`credentials.json` in `config/gmail/` legen; beim ersten Lauf mit Handlungsbedarf: Browser-OAuth als `es@uppr.de`.
+`credentials.json` in `config/gmail/` legen; beim ersten Lauf mit Handlungsbedarf: Browser-OAuth für `js@uppr.de` (Entwürfe) und `es@uppr.de` (Versand).
 
 Ohne API: `gmail_enabled = False` in [`config/settings.py`](config/settings.py) — dann nur `.html`/`.eml` nutzen.
 
@@ -162,8 +165,11 @@ Zentrale Einstellungen in [`config/settings.py`](config/settings.py) (Pydantic `
 | `report_dir` | `reports` | Report-Ausgabe |
 | `screenshot_dir` | `reports/screenshots` | Screenshots |
 | `gmail_enabled` | `True` | Gmail-API für Entwürfe |
-| `gmail_sender` | `es@uppr.de` | Absender / OAuth-Konto |
-| `gmail_credentials_dir` | `config/gmail` | `credentials.json`, `token.json` |
+| `gmail_sender` | `es@uppr.de` | Absender / OAuth-Konto für Versand |
+| `gmail_drafts_mailbox` | `js@uppr.de` | Postfach für Publisher-Entwürfe (OAuth) |
+| `gmail_credentials_dir` | `config/gmail` | `credentials.json`, `token_es.json`, `token_js.json` |
+| `qc_report_recipient` | `js@uppr.de` | Empfänger der gesendeten QC-Benachrichtigung (mit CSV) |
+| `qc_notify_name` | `Janine` | Anrede im internen Report-Entwurf |
 
 Der Browser simuliert standardmäßig ein **Android-Mobile-Gerät** (Viewport, User-Agent, Geolocation Berlin) mit `playwright-stealth`, um Bot-Detection zu reduzieren. Einzelne Scraper schalten für Klicks temporär auf Desktop-Viewport um.
 

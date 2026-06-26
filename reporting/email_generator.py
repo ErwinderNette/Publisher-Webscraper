@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from email import encoders
 from email.mime.base import MIMEBase
-from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -22,6 +21,27 @@ from config.contacts import PublisherContact, get_contact_by_url
 from config.settings import settings
 
 CODE_RE = re.compile(r"(?:AFF|KUP)\d{4}", re.IGNORECASE)
+
+_GENERIC_MAILBOX = frozenset(
+    {
+        "info",
+        "mail",
+        "kontakt",
+        "contact",
+        "office",
+        "team",
+        "hello",
+        "support",
+        "admin",
+        "service",
+        "post",
+        "sales",
+        "help",
+        "noreply",
+        "no-reply",
+        "buero",
+    }
+)
 
 _MONTHS_DE = (
     "",
@@ -48,11 +68,8 @@ _jinja = Environment(
 
 @dataclass
 class EmailIssue:
+    label: str
     instruction: str
-    screenshot_rel: str
-    screenshot_abs: str
-    cid: str
-    image_filename: str
 
 
 @dataclass
@@ -64,6 +81,14 @@ class PublisherEmailDraft:
     html_body: str
     issues: list[EmailIssue]
     partner_url: str
+
+
+@dataclass
+class InternalReportDraft:
+    subject: str
+    plain_body: str
+    html_body: str
+    recipient: str
 
 
 def _slug(name: str) -> str:
@@ -84,10 +109,37 @@ def _parse_pruefdatum(value: str) -> Optional[datetime]:
     return None
 
 
-def _screenshot_abs(relative: str) -> str:
-    if not relative or relative == "-":
+def _capitalize_name(part: str) -> str:
+    return part[:1].upper() + part[1:].lower() if part else ""
+
+
+def _first_name_from_publisher_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name or name == "-":
         return ""
-    return os.path.join(settings.report_dir, relative)
+    first = name.split()[0]
+    if len(first) < 2 or not first.replace("-", "").isalpha():
+        return ""
+    return _capitalize_name(first)
+
+
+def _first_name_from_email(email: str) -> str:
+    local = (email or "").split("@")[0].lower()
+    if not local or local in _GENERIC_MAILBOX:
+        return ""
+    if "." in local:
+        first = local.split(".")[0]
+        if first.isalpha() and len(first) >= 2:
+            return _capitalize_name(first)
+    return ""
+
+
+def greeting_from_contact(contact: PublisherContact) -> str:
+    """Vorname aus publisher_name, sonst aus E-Mail, sonst „zusammen“."""
+    first = _first_name_from_publisher_name(contact.publisher_name)
+    if not first:
+        first = _first_name_from_email(contact.publisher_email)
+    return first if first else "zusammen"
 
 
 def _build_instruction(row: dict, expected_code: str = "") -> str:
@@ -119,33 +171,22 @@ def _build_instruction(row: dict, expected_code: str = "") -> str:
     return base
 
 
-def _pick_screenshot(row: dict) -> str:
-    ss = str(row.get("Screenshot", "") or "").strip()
-    if ss and ss != "-":
-        return ss
-    overview = str(row.get("Übersicht_Screenshot", "") or "").strip()
-    return overview if overview != "-" else "-"
+def _issue_label(row: dict) -> str:
+    label = str(row.get("Angebot", "") or "").strip()
+    if label and label != "-":
+        return label
+    pruefpunkt = str(row.get("Prüfpunkt", "") or "").strip()
+    return pruefpunkt or "Unbekanntes Angebot"
 
 
-def _build_issues(
-    issue_rows: pd.DataFrame,
-    expected_code: str,
-    publisher_slug: str,
-) -> list[EmailIssue]:
+def _build_issues(issue_rows: pd.DataFrame, expected_code: str) -> list[EmailIssue]:
     issues: list[EmailIssue] = []
-    for idx, (_, row) in enumerate(issue_rows.iterrows()):
-        rel = _pick_screenshot(row.to_dict())
-        abs_path = _screenshot_abs(rel)
-        if not abs_path or not os.path.isfile(abs_path):
-            continue
-        cid = f"issue{idx}@{publisher_slug}"
+    for _, row in issue_rows.iterrows():
+        row_dict = row.to_dict()
         issues.append(
             EmailIssue(
-                instruction=_build_instruction(row.to_dict(), expected_code),
-                screenshot_rel=rel,
-                screenshot_abs=abs_path,
-                cid=cid,
-                image_filename=os.path.basename(abs_path),
+                label=_issue_label(row_dict),
+                instruction=_build_instruction(row_dict, expected_code),
             )
         )
     return issues
@@ -173,17 +214,15 @@ def build_publisher_drafts(
             )
             continue
 
-        slug = _slug(publisher)
-        issues = _build_issues(group, expected_code, slug)
+        issues = _build_issues(group, expected_code)
         if not issues:
-            print(f"⚠️ Keine Screenshots für '{publisher}' – E-Mail übersprungen.")
             continue
 
         pruefdatum = _parse_pruefdatum(str(group["Prüfdatum"].iloc[0]))
         monat_label, jahr = _monat_label(pruefdatum)
 
         ctx = {
-            "publisher_email": contact.publisher_email,
+            "greeting": greeting_from_contact(contact),
             "page_url": contact.page_url,
             "monat_label": monat_label,
             "jahr": jahr,
@@ -207,9 +246,45 @@ def build_publisher_drafts(
     return drafts
 
 
-def _build_mime_message(
+def _attach_csv(msg: MIMEMultipart, csv_path: str) -> None:
+    if not csv_path or not os.path.isfile(csv_path):
+        return
+    with open(csv_path, "rb") as f:
+        part = MIMEBase("text", "csv")
+        part.set_payload(f.read())
+    encoders.encode_base64(part)
+    part.add_header(
+        "Content-Disposition",
+        "attachment",
+        filename=os.path.basename(csv_path),
+    )
+    msg.attach(part)
+
+
+def build_internal_report_draft(
+    publisher_draft_count: int,
+    pruefdatum: Optional[datetime] = None,
+) -> InternalReportDraft:
+    monat_label, jahr = _monat_label(pruefdatum)
+    ctx = {
+        "notify_name": settings.qc_notify_name,
+        "monat_label": monat_label,
+        "jahr": jahr,
+        "publisher_draft_count": publisher_draft_count,
+    }
+    plain = _jinja.get_template("internal_report_email.txt.j2").render(**ctx)
+    html = _jinja.get_template("internal_report_email.html.j2").render(**ctx)
+    subject = f"trendtours QC – Report {monat_label} {jahr}"
+    return InternalReportDraft(
+        subject=subject,
+        plain_body=plain,
+        html_body=html,
+        recipient=settings.qc_report_recipient,
+    )
+
+
+def _build_publisher_mime_message(
     draft: PublisherEmailDraft,
-    csv_path: str,
     from_addr: str,
 ) -> MIMEMultipart:
     msg = MIMEMultipart("mixed")
@@ -218,45 +293,47 @@ def _build_mime_message(
     msg["To"] = draft.contact.publisher_email
     msg["Date"] = email.utils.formatdate(localtime=True)
 
-    related = MIMEMultipart("related")
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(draft.plain_body, "plain", "utf-8"))
     alt.attach(MIMEText(draft.html_body, "html", "utf-8"))
-    related.attach(alt)
-
-    for issue in draft.issues:
-        with open(issue.screenshot_abs, "rb") as f:
-            img = MIMEImage(f.read(), _subtype="png")
-        img.add_header("Content-ID", f"<{issue.cid}>")
-        img.add_header("Content-Disposition", "inline", filename=issue.image_filename)
-        related.attach(img)
-
-    msg.attach(related)
-
-    if csv_path and os.path.isfile(csv_path):
-        with open(csv_path, "rb") as f:
-            part = MIMEBase("text", "csv")
-            part.set_payload(f.read())
-        encoders.encode_base64(part)
-        part.add_header(
-            "Content-Disposition",
-            "attachment",
-            filename=os.path.basename(csv_path),
-        )
-        msg.attach(part)
-
+    msg.attach(alt)
     return msg
+
+
+def _build_internal_mime_message(
+    draft: InternalReportDraft,
+    csv_path: str,
+    from_addr: str,
+) -> MIMEMultipart:
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = draft.subject
+    msg["From"] = from_addr
+    msg["To"] = draft.recipient
+    msg["Date"] = email.utils.formatdate(localtime=True)
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(draft.plain_body, "plain", "utf-8"))
+    alt.attach(MIMEText(draft.html_body, "html", "utf-8"))
+    msg.attach(alt)
+    _attach_csv(msg, csv_path)
+    return msg
+
+
+def _email_out_dir(timestamp: str) -> str:
+    out_dir = os.path.join(settings.report_dir, "emails", timestamp)
+    os.makedirs(out_dir, exist_ok=True)
+    return out_dir
 
 
 def write_email_files(
     drafts: list[PublisherEmailDraft],
+    internal_draft: InternalReportDraft,
     csv_path: str,
     timestamp: str,
     from_addr: str,
 ) -> str:
     """Schreibt HTML, EML und README nach reports/emails/{timestamp}/."""
-    out_dir = os.path.join(settings.report_dir, "emails", timestamp)
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = _email_out_dir(timestamp)
 
     if csv_path and os.path.isfile(csv_path):
         shutil.copy2(csv_path, os.path.join(out_dir, os.path.basename(csv_path)))
@@ -269,26 +346,34 @@ def write_email_files(
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(draft.html_body)
 
-        msg = _build_mime_message(draft, csv_path, from_addr)
+        msg = _build_publisher_mime_message(draft, from_addr)
         with open(eml_path, "wb") as f:
             f.write(msg.as_bytes())
+
+    with open(os.path.join(out_dir, "internal_report.html"), "w", encoding="utf-8") as f:
+        f.write(internal_draft.html_body)
+
+    internal_msg = _build_internal_mime_message(internal_draft, csv_path, from_addr)
+    with open(os.path.join(out_dir, "internal_report.eml"), "wb") as f:
+        f.write(internal_msg.as_bytes())
 
     readme = """Trendtours QC – E-Mail-Entwürfe
 ================================
 
-Pro Publisher mit Handlungsbedarf liegt hier:
-- {slug}.html  – Vorschau / Copy-Paste
-- {slug}.eml   – Import in Mail-Client (Outlook, Apple Mail)
-- QC_Report_*.csv – vollständiger QC-Report als Anhang (in .eml enthalten)
+Publisher (Handlungsbedarf):
+- {slug}.html / {slug}.eml – Entwurf pro Publisher (ohne Report-Anhang)
 
-Gmail-Entwürfe (falls konfiguriert) liegen zusätzlich im Postfach es@uppr.de.
+Interner Report:
+- internal_report.html / internal_report.eml – Vorschau der Benachrichtigung an {recipient}
+- QC_Report_*.csv – Kopie des Reports im Ordner
 
-An: jeweilige publisher_email aus contacts.yaml
-Ansprache im Text: Hey [E-Mailadresse]
+Gmail (falls konfiguriert):
+- Publisher-Entwürfe an die jeweiligen Kontakte
+- QC-Benachrichtigung mit CSV wird direkt an {recipient} gesendet
 
-Vor dem Versand bitte Text und Screenshots kurz prüfen.
-""".replace(
-        "{slug}", "publisher_slug"
+Publisher-Ansprache: Hey [Vorname] oder Hey zusammen (aus publisher_name in contacts.yaml)
+""".replace("{slug}", "publisher_slug").replace(
+        "{recipient}", internal_draft.recipient
     )
     with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as f:
         f.write(readme)
@@ -304,25 +389,40 @@ def generate_emails(
 ) -> list[PublisherEmailDraft]:
     """Hauptfunktion: Drafts bauen, Dateien schreiben, optional Gmail."""
     drafts = build_publisher_drafts(results, expected_code)
-    if not drafts:
-        print("\n📧 Keine E-Mail-Entwürfe (kein Handlungsbedarf oder fehlende Kontakte).")
-        return []
 
+    pruefdatum = None
+    if results:
+        pruefdatum = _parse_pruefdatum(str(results[0].get("Prüfdatum", "")))
+
+    internal_draft = build_internal_report_draft(len(drafts), pruefdatum)
     from_addr = settings.gmail_sender
-    out_dir = write_email_files(drafts, csv_path, timestamp, from_addr)
+    out_dir = write_email_files(drafts, internal_draft, csv_path, timestamp, from_addr)
 
-    print(f"\n📧 E-Mail-Entwürfe: {len(drafts)} Publisher")
+    if drafts:
+        print(f"\n📧 Publisher-E-Mail-Entwürfe: {len(drafts)}")
+        for d in drafts:
+            print(f"    • {d.publisher} → {d.contact.publisher_email} ({d.subject})")
+    else:
+        print("\n📧 Keine Publisher-E-Mail-Entwürfe (kein Handlungsbedarf oder fehlende Kontakte).")
+
     print(f" -> Ordner: {out_dir}")
-    for d in drafts:
-        print(f"    • {d.publisher} → {d.contact.publisher_email} ({d.subject})")
+    print(
+        f" 📋 Interne QC-Benachrichtigung: {internal_draft.recipient} "
+        f"({internal_draft.subject})"
+    )
 
     if settings.gmail_enabled:
         try:
-            from reporting.gmail_drafts import create_gmail_drafts
+            from reporting.gmail_drafts import (
+                create_gmail_drafts,
+                send_internal_report_email,
+            )
 
-            create_gmail_drafts(drafts, csv_path, from_addr)
+            if drafts:
+                create_gmail_drafts(drafts, from_addr)
+            send_internal_report_email(internal_draft, csv_path, from_addr)
         except Exception as e:
-            print(f"⚠️ Gmail-Entwürfe fehlgeschlagen: {e}")
+            print(f"⚠️ Gmail-Versand fehlgeschlagen: {e}")
             if "Gmail API" in str(e) or "accessNotConfigured" in str(e):
                 print(
                     "   → Google Cloud: Gmail API im Projekt des Desktop-Clients aktivieren "
